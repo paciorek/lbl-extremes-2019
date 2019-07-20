@@ -50,16 +50,17 @@ Be warned that you probably do not want to make your own notes or changes to the
 Run the following commands:
 
 - `cd /directory/where/you/want/repository/located`
-- `git clone https://github.com/paciorek/lbl-workshop-2019
+- `git clone https://github.com/paciorek/lbl-workshop-2019`
 
 Then to update from the repository to get any changes we've made:
 
-- `cd /directory/where/you/put/the/repository/lbl-workshop-2019
+- `cd /directory/where/you/put/the/repository/lbl-workshop-2019`
 - `git pull`
 
 ## As a zip file
 
-If you don't want to bother using Git or have problems, simply download a zip file with all the material from [https://github.com/paciorek/lbl-workshop-2019/archive/master.zip](https://github.com/paciorek/lbl-workshop-2019/archive/master.zip).
+If you don't want to bother using Git or have problems, simply download a zip file with all the material from [https://github.com/paciorek/lbl-workshop-2019/archive/master.zip](https://github.com/paciorek/lbl-extremes-2019/archive/master.zip).
+
 
 # R vs. Python
 
