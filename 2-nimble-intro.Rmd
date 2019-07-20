@@ -127,7 +127,7 @@ The first step is to build an R representation of the model.
 nYears <- ncol(y)
 J <- nrow(y)
 tt <- 1950:2017
-tt <- tt - mean(tt)
+tt <- tt - mean(tt)  ## better MCMC mixing if covariates are centered
 
 set.seed(1)
 
@@ -159,7 +159,7 @@ cModel <- compileNimble(model)
 
 # Fit the model using MCMC - overview
 
-In BUGS or JAGS, one would provide the model code, input data and constant values, and (optionally) initial parameter values and the software would directly create and run an MCMC, returning the results to you.
+In BUGS, JAGS or Stan, one would provide the model code, input data and constant values, and (optionally) initial parameter values and the software would directly create and run an MCMC, returning the results to you.
 
 In NIMBLE, you have more fine-grained control over these steps.
 
@@ -238,7 +238,11 @@ ts.plot(samples[ , 'sigma0'], xlab = 'iteration', main = 'sigma0')
 ts.plot(samples[ , 'sigma1'], xlab = 'iteration', main = 'sigma1')
 ts.plot(samples[ , 'tau0'], xlab = 'iteration', main = 'tau0')
 ts.plot(samples[ , 'tau1'], xlab = 'iteration', main = 'tau1')
+```
 
+In general to assess mixing it's a good idea to run multiple chains from over-dispersed starting values. So we create a function that will generate initial values, based on some understanding of where we think the posterior is concentrated (yes, this is somewhat circular...).
+
+```{r}
 ## decide once see initial samples
 initsFun <- function() {
       mu0 <- runif(1, 30, 40)
@@ -280,7 +284,7 @@ Considerations: you'll want to think about how to set up the over-dispersed star
 
 # Assessing MCMC performance from multiple chains
 
-```{r, gelman-rubin, fig.cap='', fig.height=5, fig.width=8}
+```{r, gelman-rubin, fig.cap='', fig.height=5, fig.width=10}
 par(mfrow = c(1,2))
 gelman.diag(samples)
 ## and here's a graphical representation of the information
@@ -333,6 +337,8 @@ ts.plot(samplesSlice[ , 'sigma0'], xlab = 'iteration', main = 'sigma0')
 ts.plot(samplesSlice[ , 'sigma1'], xlab = 'iteration', main = 'sigma1')
 ts.plot(samplesSlice[ , 'tau0'], xlab = 'iteration', main = 'tau0')
 ts.plot(samplesSlice[ , 'tau1'], xlab = 'iteration', main = 'tau1')
+
+effectiveSize(samplesSlice)  # ESS
 ```
 
 Ok, so not clear that helped much, particularly given the slice sampler is rather slower per iteration than Metropolis sampling.

@@ -32,7 +32,7 @@ First we write nimbleFunctions for the density and simulation functions. Note th
   - The 'd' function should have *log* as its last argument, a binary argument for whether the log density is returned or not. 
   - The 'r' function should have *n* as its first argument but need only work for ```n=1```.
 
-```{r, dbetabin}
+```{r, dgev}
 dgev <- nimbleFunction(
     run = function(x = double(0), mu = double(0), sigma = double(0), xi = double(0), 
         log = integer(0, default = 0)) {
@@ -69,7 +69,8 @@ The functions are written as nimbleFunctions. The NIMBLE manual has a lot of inf
 Strictly speaking you may not need the 'r' function if you are using MCMC and the samplers used don't need to sample from the prior. For standard NIMBLE samplers, this will be the case, so you wouldn't need `rgev`. However, we do need it because we have missing observations and `rgev` is used to impute those values during MCMC.
 
 ```{r, scopefix, echo=FALSE}
-# not clear why dbetabin() not being put into global
+#### IGNORE THIS; ONLY NEEDED FOR CREATION OF HTML/PDF #####
+# not clear why dgev() not being put into global
 # if this isn't done, registerDistributions fails to find dbetabin in knitr
 assign('dgev', dgev, .GlobalEnv)
 assign('rgev', rgev, .GlobalEnv)
@@ -134,6 +135,8 @@ bayesian_gev_model
 ```
 
 It's a bit more work to do the NIMBLE version, but you have much more control over the MCMC sampling, both in terms of getting a better algorithm and in terms of diagnosing problems.
+
+And most importantly you can extend the model in small or large ways. 
 
 
 # A hierarchical EVA model
@@ -247,7 +250,7 @@ ts.plot(samples[ , 'eta'], xlab = 'iteration', main = 'mean shape')
 ts.plot(samples[ , 'zeta'], xlab = 'iteration', main = 'sd shape')
 ```
 
-Here are (some of) the trend parameters for location.
+Here are the trend parameters for the  location parameter for some of the stations.
 
 ```{r, fig.cap=""}
 par(mfrow = c(3, 4), mai = c(.6, .5, .4, .1), mgp = c(1.8, 0.7, 0))
@@ -258,7 +261,7 @@ for(j in 1:12) {
 }                
 ```
 
-Here are (some of) the trend parameters for the scale.
+Here are the trend parameters for the scale parameter for some of the stations.
 
 ```{r, fig.cap=""}
 par(mfrow = c(3, 4), mai = c(.6, .5, .4, .1), mgp = c(1.8, 0.7, 0))
