@@ -1,0 +1,406 @@
+---
+title: "Statistical software for climate: extRemes, climextRemes, and NIMBLE"
+subtitle: "Part 1: extRemes and climextRemes"
+date: "July 2019"
+author: "Chris Paciorek"
+---
+
+# extRemes and climextRemes
+
+We'll consider two R packages for fitting statistical extreme value models to data. They build heavily off the material in Coles: An Introduction to Statistical Modeling of Extreme Values. 
+
+ - `extRemes` is a more general package and provides a wider variety of fitting methods as well as  some diagnostics and more general functionality. We'll see a bit of this but won't delve into the tail dependence or (limited) spatial dependence features of extRemes.
+
+ - `climextRemes` uses extRemes for fitting and provides a small set of fitting methods (maximum likelihood estimation for GEV and POT), but provides
+
+    - a wider variety of return level/value/probability estimates with uncertainty,
+    - tools for event attribution and analysis of trends,
+    - easier handling of replicates,
+    - various tools for ease of use (missing data, scaling of covariates, declustering, low extremes).
+
+# A basic data set - annual maxima
+
+Fort Collins precipitation from the GHCN (provided by extRemes):
+
+```{r, fig.cap=""}
+library(extRemes)
+data(Fort)
+years <- min(Fort$year):max(Fort$year)
+nYears <- length(years)
+threshold <- 1.5 # inches; might want to transform everything to cm
+ord <- order(Fort$year, Fort$month, Fort$day) 
+Fort <- Fort[ord, ]
+ind <- Fort$Prec > threshold
+index <- seq_len(nrow(Fort))
+FortExc <- Fort[ind, ]
+head(FortExc)
+
+## Plot annual maxes to guide interpretation
+
+FortMax <- aggregate(Prec ~ year, data = Fort, max)
+plot(FortMax$year, FortMax$Prec, xlab = 'year', ylab = 'maximum of daily precip (inches)', type = 'l')
+```
+
+# A basic data set - peaks over a high threshold
+
+Here is the peaks-over-threshold version of the data.
+
+```{r, fig.cap=""}
+firstBlock <- min(Fort$year)
+years <- min(Fort$year):max(Fort$year)
+nYears <- length(years)
+ord <- order(Fort$year, Fort$month, Fort$day) 
+Fort <- Fort[ord, ]
+threshold <- quantile(Fort$Prec[Fort$Prec > 0], 0.99)
+ind <- Fort$Prec > threshold
+FortExc <- Fort[ind, ]
+plot(FortExc$year, FortExc$Prec, xlab = 'year',
+   ylab = paste0('daily precipitation above ', threshold, ' inches.'))
+```
+
+
+# Some basic fitting with extRemes
+
+```{r, fig.cap=""}
+## GEV
+gev_model <- fevd(FortMax$Prec, type = 'GEV')
+gev_model
+ci(gev_model, return.period = 20)
+pextRemes(gev_model, q = 3)
+## return time
+1 / (1-pextRemes(gev_model, q = 3.417))
+
+## POT
+pot_model <- fevd(Prec, Fort, threshold = threshold, type = 'PP',
+                        span = length(unique(Fort$year)))
+pot_model
+
+bayesian_pot_model <- fevd(Prec, Fort, threshold = threshold, type = 'PP',
+                           method = 'Bayesian', span = length(unique(Fort$year)),
+                           initial = as.list(gev_model$results$par), iter = 1999)
+bayesian_pot_model
+```
+
+# How do I select the threshold
+
+Well, as big as seems possible given limitations of dataset size...
+
+Coles suggest:
+
+ - mean residual life plot (see extRemes::mrlplot)
+ - assess stability of parameter estimates to range of thresholds (see extRemes::threshrange.plot)
+
+```{r, fig.cap=""}
+mrlplot(Fort$Prec, xlab = 'u')
+```
+
+We should determine the threshold as the value above which the "plot should be approximately linear in 'u'", according to Coles.
+
+What do folks think? 
+
+
+```{r, fig.cap=""}
+## Use range of threshold from ~95%ile to ~99.9%ile
+pot_model <- threshrange.plot(Fort$Prec, r = c(.75, 3), type = 'PP', span = length(unique(Fort$year)))
+```
+
+What do folks think?
+
+# Some basic fitting with climextRemes
+
+```{r, fig.cap=""}
+## GEV
+library(climextRemes)
+gev_model <- fit_gev(FortMax$Prec, returnPeriod = 20, returnValue = 3.5,
+             getParams = TRUE)
+gev_model
+gev_model$returnValue + c(-2,2)*gev_model$se_returnValue
+exp(gev_model$logReturnProb + c(-2,2)*gev_model$se_logReturnProb)
+
+## POT
+pot_model <- fit_pot(FortExc$Prec, threshold = threshold, nBlocks = nYears, 
+        returnPeriod = 20, returnValue = 3.5,
+        firstBlock = min(FortExc$year), blockIndex = FortExc$year,
+        getParams = TRUE, bootSE = TRUE)
+## Note: 'blockIndex' allows block-bootstrapping by year
+## unlike extRemes, climextRemes takes only the exceedances as input data
+pot_model
+pot_model$returnValue + c(-2,2)*pot_model$se_returnValue_boot
+```
+
+# Fitting with covariates (trends in this case)
+
+```{r, fig.cap=""}
+pot_model <- fit_pot(FortExc$Prec, x = data.frame(years = years), locationFun = ~years,
+               threshold = threshold,
+               nBlocks = nYears, blockIndex = FortExc$year, firstBlock = min(Fort$year),
+               returnPeriod = 20, returnValue = 3.5,
+               getParams = TRUE, xNew = data.frame(years = range(Fort$year)))
+## Note: 'blockIndex' allows matching of observations to covariate ('x') values
+
+pot_model$returnValue
+exp(pot_model$logReturnPeriod)
+
+# Trend assessment
+
+```{r, fig.cap=""}
+pot_model <- fit_pot(FortExc$Prec, x = data.frame(years = years), locationFun = ~years,
+               threshold = threshold,
+               nBlocks = nYears, blockIndex = FortExc$year, firstBlock = min(Fort$year),
+               returnPeriod = 20, returnValue = 3.5,
+               getParams = TRUE, xNew = data.frame(years = max(Fort$year)),
+               xContrast = data.frame(years = min(Fort$year)))
+
+pot_model$returnValueDiff
+pot_model$returnValueDiff + c(-2, 2)*pot_model$se_returnValueDiff
+
+## Probability ratio (aka risk ratio) with uncertainty
+exp(pot_model$logReturnProbDiff)
+exp(pot_model$logReturnProbDiff + c(-2, 2)*pot_model$se_logReturnProbDiff)
+```
+
+extRemes also allows one to fit with covariates, specified in a similar way, though it has somewhat less richness in what it will directly estimate for you in terms of contrasts at different covariate values.
+
+# Declustering to minimize temporal autocorrelation
+
+```{r, fig.cap=""}
+pot_model <- fit_pot(FortExc$Prec, x = data.frame(years = years), locationFun = ~years,
+               threshold = threshold,
+               nBlocks = nYears, blockIndex = FortExc$year, firstBlock = min(Fort$year),
+               index = FortExc$obs,
+               returnPeriod = 20, returnValue = 3.5,
+               getParams = TRUE, xNew = data.frame(years = max(Fort$year)),
+               xContrast = data.frame(years = min(Fort$year)),
+               declustering = 'noruns')
+
+pot_model$returnValueDiff
+pot_model$returnValueDiff + c(-2, 2)*pot_model$se_returnValueDiff
+
+## Probability ratio (aka risk ratio) with uncertainty
+exp(pot_model$logReturnProbDiff)
+exp(pot_model$logReturnProbDiff + c(-2, 2)*pot_model$se_logReturnProbDiff)
+```
+
+# Seasonal analysis (of summer precipitation)
+
+Might be more interesting to analyze drought but for Fort Collins, the lower quantiles
+of summer precipitation are quite close to zero so not clear that EVA is appropriate.
+
+
+```{r, fig.cap=""}
+summerData <- Fort[Fort$month %in% 6:8, ]  # June, July, August precipitation
+FortSummer <- aggregate(Prec ~ year, data = summerData, sum)
+## not-so-extreme threshold given limited obs when aggregated:
+summerThreshold <- quantile(FortSummer$Prec, 0.8)  
+hist(FortSummer$Prec)
+abline(v = summerThreshold)
+
+FortSummerExc <- FortSummer[FortSummer$Prec > summerThreshold, ]
+FortSummerExc
+
+## Stationary model
+pot_model <- fit_pot(FortSummerExc$Prec, threshold = summerThreshold,
+               nBlocks = nYears, blockIndex = FortSummerExc$year, firstBlock = min(Fort$year),
+               returnPeriod = 20, returnValue = 10, bootSE = TRUE)
+## Note: each year (single observation) treated as a block, so return probability
+## can be interpreted as probability of exceeding a value in a single year.
+
+exp(pot_model$logReturnProb)  ## return probability for 10 inch summer precipitation for 1999
+exp(pot_model$logReturnProb + c(-2, 2) * pot_model$se_logReturnProb) 
+exp(pot_model$logReturnProb + c(-2, 2) * pot_model$se_logReturnProb_boot)
+pot_model$numBootFailures  # perhaps a sign for concern
+```
+
+# Fitting with replicates
+
+climextRemes is designed to handle model ensembles in a statistically sound way by treating each ensemble member as a replicate, and thereby as a contribution to the overall likelihood.
+
+We'll demonstrate with a 50-member CAM5 all-forcings ensemble for 1960-2013. The variable of interest is March-August precipitation over the US states of Texas and Oklahoma. 
+
+```{r, fig.cap=""}
+library(ncdf4)
+nc_all <- nc_open('pr_MarAug_LBNL_CAM5-1-1degree_All-Hist_est1_v2-0_196001-201312.nc')
+all <- ncvar_get(nc_all, 'pr', start=c(1,1), count = c(-1,-1))
+
+## Preprocessing to extract 50 ensemble members available for full 1960-2013 period
+avail <- c(1:10, 36:50, 61:70, 86:100)
+startYear <- 1960
+endYear <- 2013
+fullYears <- startYear:endYear
+nYears <- length(fullYears)
+baseline <- 1961:2010
+baseIndices <- baseline - startYear + 1
+
+## 54 years (rows) with 50 ensemble members (columns)
+all <- all[ , avail]
+
+## Calculate (relative) precipitation anomalies
+mn <- mean(all[baseIndices, ])
+allAnom <- all / mn
+
+## Set up replicated data in format required
+nReplicates <- ncol(allAnom)         # 50 replicates (ensemble members)
+threshold <- quantile(allAnom, .02)   # 2th percentile of distribution
+allAnomVec <- c(allAnom)  ## string out data in a column-wise vector
+blockIndex <- rep(fullYears, nReplicates)
+replicateIndex <- rep(1:nReplicates, each = nYears)
+sub <- which(allAnomVec < threshold)
+
+allAnomVec[1:20]
+blockIndex[1:20]
+replicateIndex[1:20]
+
+hist(allAnomVec[sub])
+blockIndex[sub]
+replicateIndex[sub]
+
+out <- fit_pot(allAnomVec[sub], threshold = threshold,
+               x = data.frame(years = fullYears), locationFun = ~years, 
+               nBlocks = nYears, blockIndex = blockIndex[sub], firstBlock = startYear,
+               replicateIndex = replicateIndex[sub], nReplicates = nReplicates,
+               returnPeriod = 20, returnValue = 0.6, 
+               xNew = data.frame(years = endYear),
+               xContrast = data.frame(years = startYear),
+               upperTail = FALSE)
+## Note: linear model for location parameter
+## Note: 'replicateIndex' and 'nReplicates' allow for correct handling of model ensembles
+## Note: 'upperTail = FALSE' for analysis of lower tail extremes
+
+out$returnValue           ## 20-year return value for 2013
+
+exp(out$logReturnPeriod)   ## Return period for 2013 for anomaly of 60% average precipitation
+exp(out$logReturnPeriod + c(-2, 2) * out$se_logReturnPeriod)
+exp(out$logReturnProbDiff)  ## Ratio of return probabilities for end year compared to begin year
+exp(out$logReturnProbDiff + c(-2, 2) * out$se_logReturnProbDiff)  ## confidence interval
+```
+
+Note that with an ensemble we have the statistical power to estimate probabilities of fairly extreme events at the seasonal/annual time scale.
+
+# Event attribution: 2011 Texas heatwave/drought
+
+Now consider an event attribution study, using an ensemble of model simulations only for 2011, to try to understand the 2011 Texas heatwave/drought.
+
+Instead of doing EVA (which requires the event be extreme in both factual and counterfactual),
+simply count the number of exceedances and use epidemiological/biostatistical
+methods for estating risk ratios (borrowed from analysis of biomedical experiments). 
+
+```{r, fig.cap=""}
+nc_all <- nc_open('pr_MarAug_LBNL_CAM5-1-1degree_All-Hist_est1_v2-0_196001-201312.nc')
+nc_nat <- nc_open('pr_MarAug_LBNL_CAM5-1-1degree_Nat-Hist_CMIP5-est1_v2-0_196001-201312.nc')
+
+all <- ncvar_get(nc_all, 'pr', start=c(1,1), count = c(-1,-1))
+nat <- ncvar_get(nc_nat, 'pr', start=c(1,1), count = c(-1,-1))
+
+avail <- c(1:10, 36:50, 61:70, 86:100)
+
+startYr = 1960
+endYr = 2013
+fullYrs = startYr:endYr
+baseline = 1961:2010
+baseIndices <- baseline - startYr + 1
+
+## Calculate anomalies based on baseline period, 50 member full ensemble
+mnModel = mean(all[baseIndices, avail])
+
+allAnom = all / mnModel
+natAnom = nat / mnModel  # relative to all forcings baseline
+
+eventYear <-  52 # 2011
+level <- 0.9  # 90% confidence intervals
+
+## Restrict to 2011
+allAnom <- allAnom[eventYear, ]
+natAnom <- natAnom[eventYear, ]
+
+## Actual event of 0.4 (40% normal precipitation) has no exceedances
+## in either scenario, so use slightly less extreme definition
+event <- 0.5
+
+yA <- sum(allAnom < event)
+yN <- sum(natAnom < event)
+n <- length(allAnom)
+
+print(yA)  # factual events
+print(yN)  # counterfactual events
+print(n)   # sample size (# ensemble members)
+
+result <- calc_riskRatio_binom(y = c(yA, yN), n = rep(n, 2),
+                                    ciType = c('koopman', 'lrt'),
+                                    ciLevel = level, lrtControl = list(bounds = c(0.01, 500)))
+result$riskRatio
+result$ci_riskRatio_lrt  ## likelihood-ratio based interval
+result$ci_riskRatio_koopman  ## Koopman-based interval
+
+## Consider even less extreme event of 0.6
+
+event <- 0.6
+
+yA <- sum(allAnom < event)
+yN <- sum(natAnom < event)
+n <- length(allAnom)
+
+print(yA)  # factual events
+print(yN)  # counterfactual events
+print(n)   # sample size (# ensemble members)
+
+result <- calc_riskRatio_binom(y = c(yA, yN), n = rep(n, 2),
+                                    ciType = c('koopman', 'lrt'),
+                                    ciLevel = level, lrtControl = list(bounds = c(0.01, 500)))
+result$riskRatio
+result$ci_riskRatio_lrt  ## likelihood-ratio based interval
+result$ci_riskRatio_koopman  ## Koopman-based interval
+```
+
+
+# Event attribution: 2011 Texas heatwave/drought using EVA
+
+We can also use extreme value analysis to calculate the risk ratio, if the event is extreme in both scenarios.
+
+I just found a bug (to be fixed in the next version of climextRemes) when using the likelihood-ratio-based interval with the lower-tail extreme, so we need to pull in the fixed version of the function. 
+
+```{r, fig.cap=""}
+source('calc_riskRatio_pot_fixed.R')
+```
+
+Now let's proceed
+
+```{r, fig.cap=""}
+thrAll <- quantile(allAnom, 0.1)
+thrNat <- quantile(natAnom, 0.1)
+
+y1 <- allAnom[allAnom < thrAll]
+y2 <- natAnom[natAnom < thrNat]
+
+result <- calc_riskRatio_pot(0.4, y1 = allAnom[allAnom < thrAll], y2 = natAnom[natAnom < thrNat],
+                                  threshold1 = thrAll, threshold2 = thrNat,
+                                  nBlocks1 = 1, nBlocks2 = 1,
+                                  upperTail = FALSE,
+                                  ciType = c('delta'))
+result$ci_riskRatio_delta
+```
+
+That's not at all informative. (And if we tried to use the LR-based confidence interval, the optimization involved in the calculation would fail.)
+
+Let's try a less extreme event definition.
+
+```{r, fig.cap=""}
+result <- calc_riskRatio_pot(0.5, y1 = allAnom[allAnom < thrAll],
+                                  y2 = natAnom[natAnom < thrNat],
+                                  threshold1 = thrAll, threshold2 = thrNat,
+                                  nBlocks1 = 1, nBlocks2 = 1,
+                                  upperTail = FALSE,
+                                  ciType = c('delta','lrt'))
+result$ci_riskRatio_delta
+result$ci_riskRatio_lrt
+```
+
+Unfortunately, there's still a fair amount of uncertainty.
+
+
+# Breakout
+
+Work more with the examples provided above or apply the software tools to your own data or to the California winter (DJF) precipitation data for 1949-2017 [here](https://www.stat.berkeley.edu/transfer/CA_precip.Rda').  The code in `prep_data.R` will help with cleaning/rearranging.
+
+One thing worth doing would be assessing the peaks-over-threshold diagnostics for the summer total precipitation data given the small sample sizes and not-so-extreme threshold.
+
+Let me know as you have questions. 

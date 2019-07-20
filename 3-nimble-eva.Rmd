@@ -1,0 +1,272 @@
+---
+title: "Statistical software for climate: extRemes, climextRemes, and NIMBLE"
+subtitle: "Part 3: NIMBLE for extremes"
+date: "July 2019"
+author: "Chris Paciorek"
+---
+
+
+```{r chunksetup, include=FALSE} 
+# include any code here you don't want to show up in the document,
+# e.g. package and dataset loading
+library(methods)  # otherwise new() not being found - weird
+library(nimble)
+```
+
+# Doing EVA in NIMBLE
+
+NIMBLE provides a variety of distributions, as seen in Section 5.2.3 of the [NIMBLE manual](https://r-nimble.org/html_manual/cha-writing-models.html#writing-models).
+
+However, there are lots of other probability distributions out there that you might want to use. So NIMBLE allows you to code up your own distribution and then use it in BUGS code.
+
+In order to do EVA in NIMBLE we need additional, non-standard distributions, such as the GEV distribution or the point process-based distribution for POT analysis.
+
+We'll use the GEV distribution here.
+
+# Writing your own distribution 
+
+ Here's what you would do to code up your own GEV distribution and make it available in BUGS code.
+
+First we write nimbleFunctions for the density and simulation functions. Note the naming is analogous to how probability distributions are handled in R. 
+
+  - The 'd' function should have *log* as its last argument, a binary argument for whether the log density is returned or not. 
+  - The 'r' function should have *n* as its first argument but need only work for ```n=1```.
+
+```{r, dbetabin}
+dgev <- nimbleFunction(
+    run = function(x = double(0), mu = double(0), sigma = double(0), xi = double(0), 
+        log = integer(0, default = 0)) {
+        
+        returnType(double(0))
+        std <- (x - mu) / sigma
+        if(1 + xi*std <= 0) {
+             logProb <- -Inf
+        } else logProb <- -log(sigma) - (1+1/xi) * log(1 + xi * std) - (1 + xi * std)^(-1/xi)
+        if(log) return(logProb)
+        else return(exp(logProb))
+    })
+
+rgev <- nimbleFunction(
+    run = function(n = integer(0), mu = double(0), sigma = double(0), xi = double(0)) {
+        returnType(double(0))
+        if(n != 1) print("rgev only allows n = 1; using n = 1.")
+        u <- runif(1)
+        if (xi == 0) {
+           x = -log(-log(u))
+        } else {
+           x = ((-log(u))^(-xi) - 1.0)/xi
+        }
+        return (x*sigma + mu)
+    })
+```
+
+The functions are written as nimbleFunctions. The NIMBLE manual has a lot of information about this, but for now a few comments:
+
+  - nimbleFunctions are written using a subset of R syntax: not all R syntax is allowed.
+  - We require information about the types and sizes of arguments and return values.
+  - nimbleFunctions can call out to arbitrary R or C/C++ code that you write for full customizability.
+
+Strictly speaking you may not need the 'r' function if you are using MCMC and the samplers used don't need to sample from the prior. For standard NIMBLE samplers, this will be the case, so you wouldn't need `rgev`. However, we do need it because we have missing observations and `rgev` is used to impute those values during MCMC.
+
+```{r, scopefix, echo=FALSE}
+# not clear why dbetabin() not being put into global
+# if this isn't done, registerDistributions fails to find dbetabin in knitr
+assign('dgev', dgev, .GlobalEnv)
+assign('rgev', rgev, .GlobalEnv)
+```
+
+
+# A basic Bayesian EVA model
+
+We can mimic fitting a basic Bayesian model as done in extRemes:
+
+```{r, fig.cap=""}
+library(extRemes)
+data(Fort)
+FortMax <- aggregate(Prec ~ year, data = Fort, max)
+gev_model <- fevd(FortMax$Prec, type = 'GEV')
+```
+
+
+```{r, fig.cap="", fig.width=10, fig.height=5}
+code <- nimbleCode({
+   # likelihood
+   for(i in 1:n) {
+      y[i] ~ dgev(mu, sigma, xi)
+   }
+
+   # priors
+   mu ~ dflat()
+   sigma ~ dunif(0, 100)
+   xi ~ dunif(-1, 1)
+})
+
+inits <- as.list(gev_model$results$par)
+names(inits) <- c('mu', 'sigma', 'xi')
+model <- nimbleModel(code, data = list(y = FortMax$Prec), inits = inits,
+          constants = list(n = length(FortMax$Prec)))
+cModel <- compileNimble(model)
+
+conf <- configureMCMC(model, onlySlice = TRUE)
+MCMC <- buildMCMC(conf)
+cMCMC <- compileNimble(MCMC, project = model)
+samples <- runMCMC(cMCMC, niter = 1000, nburn = 100)
+
+par(mfrow = c(1,3))
+ts.plot(samples[ , 'mu'], xlab = 'iteration', main = 'mu')
+ts.plot(samples[ , 'sigma'], xlab = 'iteration', main = 'sigma')
+ts.plot(samples[ , 'xi'], xlab = 'iteration', main = 'xi')
+
+quantile(samples[ , 'mu'], c(.025, .5, .975))
+quantile(samples[ , 'sigma'], c(.025, .5, .975))
+quantile(samples[ , 'xi'], c(.025, .5, .975))
+
+```
+
+Let's compare to what we had from extRemes.
+
+```{r, fig.cap=""}
+gev_model <- fevd(FortMax$Prec, type = 'GEV')
+
+bayesian_gev_model <- fevd(FortMax$Prec, type = 'GEV', method = 'Bayesian',
+         initial = as.list(gev_model$results$par), iter = 1999)
+bayesian_gev_model
+```
+
+It's a bit more work to do the NIMBLE version, but you have much more control over the MCMC sampling, both in terms of getting a better algorithm and in terms of diagnosing problems.
+
+
+# A hierarchical EVA model
+
+Now let's use this model to analyze the California precipitation data in a similar fashion to before, but considering seasonal maxima rather than seasonal totals.
+
+```{r, fig.cap=""}
+code <- nimbleCode({
+    for(j in 1:J) {  # stations
+       for(i in 1:nYears) {  # time
+           # likelihood
+           y[j, i] ~ dgev(b0[j] + b1[j] * t[i],
+                     exp(gamma0[j] + gamma1[j] * t[i]),
+                     xi[j])  # would be hard to estimate variation over time
+       }
+       
+       # random effects
+       b0[j] ~ dnorm(mu0, sd = sigma0)
+       b1[j] ~ dnorm(mu1, sd = sigma1)
+       gamma0[j] ~ dnorm(theta0, sd = tau0)
+       gamma1[j] ~ dnorm(theta1, sd = tau1)
+       xi[j] ~ dnorm(eta, sd = zeta)
+   }
+
+   # hyperpriors
+   mu0 ~ dflat()
+   mu1 ~ dflat()
+   theta0 ~ dflat()
+   theta1 ~ dflat()
+   eta ~ dunif(-1, 1)
+   ## see Gelman (2006) for non-informative priors for variance components
+   sigma0 ~ dunif(0, 100)
+   sigma1 ~ dunif(0, 100)
+   tau0 ~ dunif(0, 100)
+   tau1 ~ dunif(0, 100)
+   zeta ~ dunif(0, 2)
+})
+```
+
+# Let's set up the model as before
+
+```{r build-model}
+load('precip.Rda')
+y <- as.matrix(maxs[ , 5:ncol(maxs)])
+n <- as.matrix(cnts[ , 5:ncol(cnts)])
+y[n < 86] <- NA
+y <- y / 10  # data now in cm not mm
+
+nYears <- ncol(y)
+J <- nrow(y)
+tt <- 1950:2017
+tt <- tt - mean(tt)
+              
+consts <- list(J = J, nYears = nYears, t = tt)
+data <- list(y = y)
+
+set.seed(1)
+inits <- list(b0 = apply(y, 1, mean, na.rm = TRUE), b1 = rnorm(J, 0, 0.01),
+                 gamma0 = log(apply(y, 1, sd, na.rm = TRUE)),
+                 gamma1 = rnorm(J, 0, .002),
+                 mu0 = mean(y, na.rm = TRUE), mu1 = 0,
+                 theta0 = log(sd(y, na.rm = TRUE)), xi = rnorm(J, 0.1, 0.1),
+                 theta1 = 0, sigma0 = 2, sigma1 = 0.01,
+                 tau0 = .1, tau1 = .002, eta = 0.1, zeta = 0.1)
+
+model <- nimbleModel(code, 
+          data = data, constants = consts, inits = inits)
+```
+
+That error is caused by having an NA in the condition of `if()`. In NIMBLE it's generally caused by having a parameter
+with an NA.  (In the next version of NIMBLE, we will suppress the
+message and just have the logProb be -Inf...) In this case it is because the GEV distribution density checks a condition involving the
+data values.
+
+In this case the issue is the NA's in the y values. We'll ignore this for now as the MCMC will simulate into those model nodes (NIMBLE treats missing data as unknown parameters).
+
+```{r, fig.cap=""}
+model$initializeInfo()
+sum(!model$isData('y'))
+sum(is.na(y))
+
+cModel <- compileNimble(model)
+cModel$calculate()
+
+conf <- configureMCMC(model)
+conf$addMonitors(c('b0','b1','gamma0','gamma1','xi'))
+MCMC <- buildMCMC(conf)
+cMCMC <- compileNimble(MCMC, project = model)
+
+niter <- 11000
+nburn <- 1000
+thin <- 20
+set.seed(1)
+
+samples <- runMCMC(cMCMC, niter = niter, nburnin = nburn, thin = thin, setSeed = 1)
+```
+
+Let's see how that went.
+
+```{r, fig.cap="", fig.width=12, fig.height=8}
+par(mfcol = c(2,5), mai = c(.6, .5, .4, .1), mgp = c(1.8, 0.7, 0), fig.width=12, fig.height=5)
+ts.plot(samples[ , 'mu0'], xlab = 'iteration', main = 'mean location intercept')
+ts.plot(samples[ , 'sigma0'], xlab = 'iteration', main = 'sd location intercept')
+ts.plot(samples[ , 'mu1'], xlab = 'iteration', main = 'mean location trend')
+ts.plot(samples[ , 'sigma1'], xlab = 'iteration', main = 'sd location trend')
+ts.plot(samples[ , 'theta0'], xlab = 'iteration', main = 'mean scale intercept')
+ts.plot(samples[ , 'tau0'], xlab = 'iteration', main = 'sd scale intercept')
+ts.plot(samples[ , 'theta1'], xlab = 'iteration', main = 'mean scale trend')
+ts.plot(samples[ , 'tau1'], xlab = 'iteration', main = 'sd scale trend')
+ts.plot(samples[ , 'eta'], xlab = 'iteration', main = 'mean shape')
+ts.plot(samples[ , 'zeta'], xlab = 'iteration', main = 'sd shape')
+```
+
+Here are (some of) the trend parameters for location.
+
+```{r, fig.cap=""}
+par(mfrow = c(3, 4), mai = c(.6, .5, .4, .1), mgp = c(1.8, 0.7, 0))
+for(j in 1:12) {
+      nm <- paste0('b1[', j, ']')
+      ts.plot(samples[ , nm], xlab = nm)
+      abline(h = 0)
+}                
+```
+
+Here are (some of) the trend parameters for the scale.
+
+```{r, fig.cap=""}
+par(mfrow = c(3, 4), mai = c(.6, .5, .4, .1), mgp = c(1.8, 0.7, 0))
+for(j in 1:12) {
+      nm <- paste0('gamma1[', j, ']')
+      ts.plot(samples[ , nm], xlab = nm)
+      abline(h = 0)
+}                
+```
+
+

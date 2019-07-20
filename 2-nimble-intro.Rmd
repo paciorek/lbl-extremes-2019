@@ -1,0 +1,369 @@
+---
+title: "Statistical software for climate: extRemes, climextRemes, and NIMBLE"
+subtitle: "Part 2: Introduction to NIMBLE"
+date: "July 2019"
+author: "Chris Paciorek"
+---
+
+```{r chunksetup, include=FALSE} 
+# include any code here you don't want to show up in the document,
+# e.g. package and dataset loading
+library(methods)  # otherwise new() not being found - weird
+library(nimble)
+```
+
+# What is NIMBLE?
+
+- A flexible extension of the BUGS and JAGS systems
+- A system for using algorithms on hierarchical statistical models
+- A system for programming algorithms to be used on hierarchical models
+- A partial compiler for math, flow control, and related syntax in R
+
+
+We have an extensive website ([r-nimble.org](r-nimble.org)) with fairly comprehensive User Manual, examples, and other information. 
+
+# Why NIMBLE?
+
+Here are some of the features you can do in NIMBLE that we are most excited about and that distinguish NIMBLE from other software:
+
+- customize your MCMCs, including choosing what parameters to block
+- define your own distributions and functions for use in BUGS code
+- use a variety of algorithms on your model, including MCMC, sequential Monte Carlo (particle filtering), and MCEM
+- write an algorithm in our system for easy dissemination to others, including your own MCMC sampler
+- compile mathematical operations in R without needing to know or write C or C++
+
+# Why Not NIMBLE?
+
+* For MCMCs that rely heavily on Gibbs sampling, JAGS may be a bit faster because of more efficient internal implementation of the calculations.
+* For certain model structures, Hamiltonian Monte Carlo, such as implemented in Stan, may work better than the default MCMC samplers in NIMBLE (but in a number of examples we've tried we've been able to achieve comparable or better performance either out-of-the-box or with some relatively simple modifications to the model or the MCMC samplers).
+* NIMBLE can take a long time to build models that have tens of thousands or more nodes (though once built, the algorithm run times can be quite good). We anticipate big improvements in future versions of NIMBLE.
+
+# The BUGS language
+
+The BUGS language is described in detail in the NIMBLE manual and in the [relevant section of the BUGS manual](http://www.openbugs.net/Manuals/ModelSpecification.html). 
+
+### Stochastic declarations
+
+  - `x ~ dgamma(shape, scale)` (`x` follows a gamma distribution with parameters `shape` and `scale`)
+
+### Deterministic declarations
+
+  - `y <- 2 * x`
+
+### For loops
+
+  - `for(i in 1:10) {x[i] <- exp(y[i])}`
+
+### Classic BUGS examples
+
+There are lots of example models originally provided by the BUGS project:
+
+  - included in NIMBLE or found here on the [JAGS website](https://sourceforge.net/projects/mcmc-jags/files/Examples/).
+  - Information: [Volume 1](http://www.mrc-bsu.cam.ac.uk/wp-content/uploads/WinBUGS_Vol1.pdf), [Volume 2](http://www.mrc-bsu.cam.ac.uk/wp-content/uploads/WinBUGS_Vol2.pdf), and [Volume 3](http://www.mrc-bsu.cam.ac.uk/wp-content/uploads/WinBUGS_Vol3.pdf) of the WinBUGS example manuals.
+
+### NIMBLE's dialect of BUGS
+
+   - The BUGS syntax used in NIMBLE has minor differences from that used in WinBUGS, OpenBUGS and/or JAGS. We'll see some of this as we go along.
+   - Also described in Section 5 of the [NIMBLE Users Manual](https://r-nimble.org/html_manual/cha-writing-models.html).
+
+# An example hierarchical model
+
+We'll develop some models for precipitation data, using multiple GHCN stations from California.
+
+Note that in these examples, I'll assume exchangeability amongst the stations, but will not account for any spatial correlation between stations. So we'll borrow strength across stations but not do so in a way that respects the spatial relationships.
+
+One can build Gaussian spatial processes into models in NIMBLE using the multivariate normal distribution but I won't cover that here.
+
+We'll also assume linearity of time trends (also likely a bad assumption). One could use spline basis functions instead (one would generally pre-compute the basis function matrix in R and pass into the  NIMBLE model). 
+
+Let's read the data in.
+
+```{r, fig.cap=""}
+load('precip.Rda')
+head(totals)
+y <- as.matrix(totals[ , 5:ncol(totals)])
+n <- as.matrix(cnts[ , 5:ncol(cnts)])
+y[n < 86] <- NA
+y <- y / 10  # data now in cm not mm
+```
+
+# Code the model (using BUGS syntax)
+
+```{r, fig.cap=""}
+code <- nimbleCode({
+    for(j in 1:J) {  # stations
+       for(i in 1:nYears) {  # time
+           # likelihood
+           y[j, i] ~ dnorm(b0[j] + b1[j] * t[i],
+                     sd = exp(gamma0[j] + gamma1[j] * t[i]))
+       }
+       
+       # random effects
+       b0[j] ~ dnorm(mu0, sd = sigma0)
+       b1[j] ~ dnorm(mu1, sd = sigma1)
+       gamma0[j] ~ dnorm(theta0, sd = tau0)
+       gamma1[j] ~ dnorm(theta1, sd = tau1)
+   }
+
+   # hyperpriors
+   mu0 ~ dflat()
+   mu1 ~ dflat()
+   theta0 ~ dflat()
+   theta1 ~ dflat()
+   ## see Gelman (2006) for non-informative priors for variance components
+   sigma0 ~ dunif(0, 100)
+   sigma1 ~ dunif(0, 100)
+   tau0 ~ dunif(0, 100)
+   tau1 ~ dunif(0, 100)
+})
+```
+
+
+# Building the model
+
+The first step is to build an R representation of the model.
+
+```{r build-model}
+nYears <- ncol(y)
+J <- nrow(y)
+tt <- 1950:2017
+tt <- tt - mean(tt)
+
+set.seed(1)
+
+consts <- list(J = J, nYears = nYears, t = tt)
+data <- list(y = y)
+## Be careful tau1 not too big given values are multiplied by +30 and exponentiated
+inits <- list(b0 = apply(y, 1, mean, na.rm = TRUE), b1 = rnorm(J, 0, 1),
+                 gamma0 = log(apply(y, 1, sd, na.rm = TRUE)), gamma1 = rnorm(J, 0, 0.002),
+                 mu0 = mean(y, na.rm = TRUE), mu1 = 0, theta0 = log(sd(y, na.rm = TRUE)),
+                 theta1 = 0, sigma0 = 5, sigma1 = 1,
+                 tau0 = 1, tau1 = 0.002)
+
+
+## create the NIMBLE model object
+model <- nimbleModel(code, 
+          data = data, constants = consts, inits = inits)
+model$initializeInfo()
+```
+
+# Compiling a model
+
+In general, you'll want a version of the model that allows for fast computation (this can then be used by any algorithms you use on the model).
+
+To create a fast compiled version of the model, you simply do this.
+
+```{r, compile-model}
+cModel <- compileNimble(model)
+```
+
+# Fit the model using MCMC - overview
+
+In BUGS or JAGS, one would provide the model code, input data and constant values, and (optionally) initial parameter values and the software would directly create and run an MCMC, returning the results to you.
+
+In NIMBLE, you have more fine-grained control over these steps.
+
+The steps of running an MCMC are as follows:
+
+ 1. configure the MCMC
+ 2. build the MCMC
+ 3. create a compiled version of the MCMC
+ 4. run the MCMC
+ 5. assess and use the MCMC samples
+
+
+If all you want to do is run an MCMC, NIMBLE's fine-grained control might not be so interesting to you, in which case you can just use `nimbleMCMC()` without using `nimbleModel()` to create the model. But by providing an explicit model object, we allow you to operate the model and program with it.
+
+
+# Configuring a basic MCMC
+
+Setting up and running an MCMC in NIMBLE in this way takes a few more steps than in BUGS or JAGS, but with the benefit of giving the user much more control of how the MCMC operates.
+
+First we *configure* the MCMC, which means setting up the samplers to be used for each node or group of nodes. NIMBLE provides a default configuration, but we'll see shortly how you can modify that. 
+
+
+```{r, conf}
+conf <- configureMCMC(model) 
+```
+You also specify the nodes for which you'd like to get the MCMC samples as output. By default hyperparameters, but not random effects/latent process values, are monitored.
+
+```{r, monitor}
+conf$addMonitors(c('b0', 'b1', 'gamma0', 'gamma1'))
+```
+
+Let's see the samplers assigned:
+
+```{r}
+conf$printSamplers()
+```
+
+# Building the MCMC algorithm for the model 
+
+Next we'll build the MCMC algorithm for the model under the default configuration. And we'll create a compiled (i.e., C++) version of the MCMC that is equivalent in functionality but will run much faster.
+
+```{r build-mcmc}
+MCMC <- buildMCMC(conf)
+cMCMC <- compileNimble(MCMC, project = model)
+```
+
+
+# Running the MCMC
+
+Now let's run the MCMC. We don't recommend running the R version of the MCMC for very many iterations - it's really slow - in part because iterating in R is slow and in part because iterating with a model in NIMBLE requires even more overhead. 
+
+```{r run-mcmc}
+niter <- 11000
+nburn <- 1000
+thin <- 20
+set.seed(1)
+
+samples <- runMCMC(cMCMC, niter = niter, nburnin = nburn, thin = thin, setSeed = 1)
+```
+
+The R and C MCMC samples are the same, so you can use the R MCMC for debugging. It's possible to step through the code line by line using R's debugging capabilities (not shown).
+
+Now let's look at the MCMC performance of this initial chain.
+
+```{r, fig.cap=""}
+par(mfrow = c(3, 4), mai = c(.6, .5, .4, .1), mgp = c(1.8, 0.7, 0))
+ts.plot(samples[ , 'b0[1]'], xlab = 'iteration', main = 'b0[1]')
+ts.plot(samples[ , 'b1[1]'], xlab = 'iteration', main = 'b1[1]')
+ts.plot(samples[ , 'gamma0[1]'], xlab = 'iteration', main = 'gamma0[1]')
+ts.plot(samples[ , 'gamma1[1]'], xlab = 'iteration', main = 'gamma1[1]')
+ts.plot(samples[ , 'mu0'], xlab = 'iteration', main = 'mu0')
+ts.plot(samples[ , 'mu1'], xlab = 'iteration', main = 'mu1')
+ts.plot(samples[ , 'theta0'], xlab = 'iteration', main = 'theta0')
+ts.plot(samples[ , 'theta1'], xlab = 'iteration', main = 'theta1')
+ts.plot(samples[ , 'sigma0'], xlab = 'iteration', main = 'sigma0')
+ts.plot(samples[ , 'sigma1'], xlab = 'iteration', main = 'sigma1')
+ts.plot(samples[ , 'tau0'], xlab = 'iteration', main = 'tau0')
+ts.plot(samples[ , 'tau1'], xlab = 'iteration', main = 'tau1')
+
+## decide once see initial samples
+initsFun <- function() {
+      mu0 <- runif(1, 30, 40)
+      mu1 <- runif(1, -.1, .1)
+      theta0 <- runif(1, 2, 3.5)
+      theta1 <- runif(1, -.1, .1)
+      sigma0 <- runif(1, 15, 40)
+      sigma1 <- runif(1, 0, 0.1)
+      tau0 <- runif(1, 0.3, 1.5)
+      tau1 <- runif(1, 0, .005)
+      b0 <- rnorm(J, mu0, sigma0)
+      b1 <- rnorm(J, mu1, sigma1)
+      gamma0 <- rnorm(J, theta0, tau0)
+      gamma1 <- rnorm(J, theta1, tau1)
+      return(list(mu0 = mu0, mu1 = mu1, theta0 = theta0, theta1 = theta1, sigma0 = sigma0, sigma1 = sigma1,
+      tau0 = tau0, tau1 = tau1, b0 = b0, b1 = b1, gamma0 = gamma0, gamma1 = gamma1))
+}             
+samples <- runMCMC(cMCMC, niter = niter, nburnin = nburn, thin = thin,
+                          inits = initsFun, nchains = 3, setSeed = TRUE,
+                          samplesAsCodaMCMC = TRUE)
+```
+
+
+
+# Using CODA
+
+NIMBLE does not provide any MCMC diagnostics. (At least not yet; there's no reason one couldn't write code for various diagnostics using the NIMBLE system.)  But one can easily use CODA or other R packages with the MCMC output from a NIMBLE MCMC.
+
+```{r coda}
+library(coda, warn.conflicts = FALSE)
+crosscorr(samples[[1]][ , c('mu0', 'mu1', 'sigma0', 'sigma1',
+                          'theta0', 'theta1', 'tau0', 'tau1')])
+effectiveSize(samples[[1]])  ## ESS
+```
+
+To apply the commonly used Gelman-Rubin potential scale reduction factor diagnostic, we'll need the multiple chains.
+
+Considerations: you'll want to think about how to set up the over-dispersed starting points and the number of iterations to use for burn-in.
+
+# Assessing MCMC performance from multiple chains
+
+```{r, gelman-rubin, fig.cap='', fig.height=5, fig.width=8}
+par(mfrow = c(1,2))
+gelman.diag(samples)
+## and here's a graphical representation of the information
+ts.plot(samples[[1]][ , 'sigma1'], xlab = 'iteration',
+     ylab = expression(sigma1), main = expression(sigma1))
+sq <- seq_along(samples[[1]][ , 'sigma1'])
+for(i in 2:3)
+      lines(sq, samples[[i]][ , 'sigma1'], col = i)
+
+ts.plot(samples[[1]][ , 'tau1'], xlab = 'iteration',
+     ylab = expression(tau1), main = expression(tau1))
+sq <- seq_along(samples[[1]][ , 'tau1'])
+for(i in 2:3)
+      lines(sq, samples[[i]][ , 'tau1'], col = i)
+```
+
+# Customizing samplers
+
+As those who've worked with MCMC before know, MCMC is a family of algorithms and there are many ways to run an MCMC for any given model, including the choice of the kind of sampler used for each parameter in the model. 
+
+One of NIMBLE's most important features is that users can easily modify the MCMC algorithm used for their model. The easiest thing to do is to start with NIMBLE's default MCMC and then make modifications. 
+
+```{r customize-mcmc, fig.cap=""}
+hypers <- c('sigma0', 'sigma1', 'tau0', 'tau1')
+confSlice <- configureMCMC(model)
+confSlice$addMonitors(c('b0','b1','gamma0','gamma1'))
+for(h in hypers) {
+      confSlice$removeSamplers(h)
+      confSlice$addSampler(target = h, type = 'slice')
+}
+confSlice$printSamplers()
+
+MCMC <- buildMCMC(confSlice)
+## we need 'resetFunctions' because we are rebuilding the MCMC for an existing model
+cMCMC <- compileNimble(MCMC, project = model, resetFunctions = TRUE)
+
+samplesSlice <- runMCMC(cMCMC, niter = niter, nburnin = nburn, thin = thin,
+             inits = inits, nchains = 1, setSeed = 1, samplesAsCodaMCMC = FALSE)
+
+par(mfrow = c(3, 4), mai = c(.6, .5, .4, .1), mgp = c(1.8, 0.7, 0))
+ts.plot(samplesSlice[ , 'b0[1]'], xlab = 'iteration', main = 'b0[1]')
+ts.plot(samplesSlice[ , 'b1[1]'], xlab = 'iteration', main = 'b1[1]')
+ts.plot(samplesSlice[ , 'gamma0[1]'], xlab = 'iteration', main = 'gamma0[1]')
+ts.plot(samplesSlice[ , 'gamma1[1]'], xlab = 'iteration', main = 'gamma1[1]')
+ts.plot(samplesSlice[ , 'mu0'], xlab = 'iteration', main = 'mu0')
+ts.plot(samplesSlice[ , 'mu1'], xlab = 'iteration', main = 'mu1')
+ts.plot(samplesSlice[ , 'theta0'], xlab = 'iteration', main = 'theta0')
+ts.plot(samplesSlice[ , 'theta1'], xlab = 'iteration', main = 'theta1')
+ts.plot(samplesSlice[ , 'sigma0'], xlab = 'iteration', main = 'sigma0')
+ts.plot(samplesSlice[ , 'sigma1'], xlab = 'iteration', main = 'sigma1')
+ts.plot(samplesSlice[ , 'tau0'], xlab = 'iteration', main = 'tau0')
+ts.plot(samplesSlice[ , 'tau1'], xlab = 'iteration', main = 'tau1')
+```
+
+Ok, so not clear that helped much, particularly given the slice sampler is rather slower per iteration than Metropolis sampling.
+
+The basic problem here is that the variance components can get trapped near zero because of the dependence between a variance component and its associated random effects. 
+
+# WAIC for model selection
+
+We could assess whether allowing for a trend in the year-to-year variance is needed. 
+
+This would involve:
+
+```{r, fig.cap=""}
+conf <- configureMCMC(model, enableWAIC = TRUE)
+conf$addMonitors(c('b0','b1','gamma0','gamma1'))
+
+MCMC <- buildMCMC(conf)
+cMCMC <- compileNimble(MCMC, project = model, resetFunctions = TRUE)
+
+niter <- 10000
+nburn <- 1000
+thin <- 1
+set.seed(1)
+
+out <- runMCMC(cMCMC, niter = niter, nburnin = nburn, thin = thin, WAIC = TRUE)
+samples <- out$samples
+out$WAIC
+```
+
+We would then want to fit a model without any variability in `gamma1` to compare against the WAIC for the base model. We could do that together or as a break-out exercise.
+
+# Breakout
+
+Play around with the code shown above or fit an alternative model or write up a model for some of your own data. 

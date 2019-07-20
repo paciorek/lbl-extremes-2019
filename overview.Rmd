@@ -1,0 +1,75 @@
+---
+title: "Statistical software for climate: extRemes, climextRemes, and NIMBLE"
+subtitle: "LBL extremes workshop short course"
+date: "July 2019"
+author: "Chris Paciorek"
+---
+
+# A few administrative things
+
+## Where to find stuff
+
+The GitHub site ([https://github.com/paciorek/lbl-extremes-2019](https://github.com/paciorek/lbl-extremes-2019)) is the main site for the short course. 
+
+# Suggestions on how to get the most out of the short course
+
+I encourage you to:
+
+- try out the code as we walk through it
+-  keep your eyes open! -- We'll illustrate a lot of syntax and concepts by example
+- try to guess what the syntax means in cases we haven't yet seen that syntax
+- play with it and try variations and try to break it and see what happens
+- tell us if something interesting happens as you experiment, and
+- ask questions.
+
+# RStudio and R Markdown
+
+I'll present most of the material from within RStudio, using R Markdown documents with embedded R code. R Markdown is an extension to the Markdown markup language that makes it easy to write HTML in a simple plain text format.  This allows us to both run the R code directly as well as compile on-the-fly to an HTML file that can be used for presentation. All files will be available on [Github](https://github.com/berkeley-scf/r-short course-winter-2019).  
+
+# Using Github to get the documents
+
+To download the files from Github, you can do the following. 
+
+## Within RStudio
+
+Within RStudio go to File->New Project->Version Control->Git and enter:
+
+- "Repository URL": https://github.com/paciorek/lbl-workshop-2019
+- "Project Directory Name": lbl-workshop-2019 (or something else of your choosing)
+- "Directory": ~/Desktop (or somewhere of your choosing)
+
+Then to update from the repository to get any changes we've made, you can select (from within RStudio):
+Tools->Version Control->Pull Branches
+
+or from the Environment/History/Git window, click on the Git tab and then on the blue down arrow.
+
+Be warned that you probably do not want to make your own notes or changes to the files we are providing. Because if you do, and you then do a "Git Pull" to update the materials, you'll have to deal with the conflict between your local version and our version. You probably will want to make a personal copy of such files in another directory or by making copies of files with new names.
+
+## From a Mac/Linux terminal window
+
+Run the following commands:
+
+- `cd /directory/where/you/want/repository/located`
+- `git clone https://github.com/paciorek/lbl-workshop-2019
+
+Then to update from the repository to get any changes we've made:
+
+- `cd /directory/where/you/put/the/repository/lbl-workshop-2019
+- `git pull`
+
+## As a zip file
+
+If you don't want to bother using Git or have problems, simply download a zip file with all the material from [https://github.com/paciorek/lbl-workshop-2019/archive/master.zip](https://github.com/paciorek/lbl-workshop-2019/archive/master.zip).
+
+# R vs. Python
+
+I'll present the material using R. However, if you're a Python user, you can also use climextRemes (but not extRemes directly) from Python.
+
+```{bash, eval=FALSE}
+## install with pip
+pip install climextremes
+## or install with conda
+conda install -c cascade climextremes
+```
+
+And for doing Bayesian modeling in Python, you should consider the Python interface to Stan (PyStan) or PyMC3.

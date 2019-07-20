@@ -1,0 +1,19 @@
+#! /usr/bin/Rscript
+# usage:
+# ./make_slides extremes
+# ./make_slides nimble-intro
+# etc.
+
+library(knitr)
+
+module <- commandArgs(trailingOnly = TRUE)
+source <- paste(module, ".Rmd", sep = "")
+
+if (file.exists(source)){
+    knit(source, envir = new.env())
+    system(paste("pandoc -s --webtex -t slidy ", paste(module, ".md", sep = ""), " -o ", paste(module, "-slides.html", sep = ""), " --self-contained"))
+ #   knit2html(source, envir = new.env())
+    rmarkdown::render(source, 'html_document', envir = new.env())
+} else {
+    cat("Error: ", source, "does not exist.\n")
+}
