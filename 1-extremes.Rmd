@@ -25,15 +25,6 @@ Fort Collins precipitation from the GHCN (provided by extRemes):
 ```{r, fig.cap=""}
 library(extRemes)
 data(Fort)
-years <- min(Fort$year):max(Fort$year)
-nYears <- length(years)
-threshold <- 1.5 # inches; might want to transform everything to cm
-ord <- order(Fort$year, Fort$month, Fort$day) 
-Fort <- Fort[ord, ]
-ind <- Fort$Prec > threshold
-index <- seq_len(nrow(Fort))
-FortExc <- Fort[ind, ]
-head(FortExc)
 
 ## Plot annual maxes to guide interpretation
 
@@ -56,6 +47,7 @@ ind <- Fort$Prec > threshold
 FortExc <- Fort[ind, ]
 plot(FortExc$year, FortExc$Prec, xlab = 'year',
    ylab = paste0('daily precipitation above ', threshold, ' inches.'))
+head(FortExc)
 ```
 
 
@@ -101,7 +93,7 @@ What do folks think?
 
 ```{r, fig.cap=""}
 ## Use range of threshold from ~95%ile to ~99.9%ile
-pot_model <- threshrange.plot(Fort$Prec, r = c(.75, 3), type = 'PP', span = length(unique(Fort$year)))
+threshrange.plot(Fort$Prec, r = c(.25, 3), type = 'PP', span = length(unique(Fort$year)))
 ```
 
 What do folks think?
@@ -114,8 +106,12 @@ library(climextRemes)
 gev_model <- fit_gev(FortMax$Prec, returnPeriod = 20, returnValue = 3.5,
              getParams = TRUE)
 gev_model
+## return value
 gev_model$returnValue + c(-2,2)*gev_model$se_returnValue
+## return probability
 exp(gev_model$logReturnProb + c(-2,2)*gev_model$se_logReturnProb)
+## return time
+exp(gev_model$logReturnPeriod + c(-2,2)*gev_model$se_logReturnPeriod)
 
 ## POT
 pot_model <- fit_pot(FortExc$Prec, threshold = threshold, nBlocks = nYears, 
@@ -276,7 +272,7 @@ exp(out$logReturnProbDiff + c(-2, 2) * out$se_logReturnProbDiff)  ## confidence 
 
 Note that with an ensemble we have the statistical power to estimate probabilities of fairly extreme events at the seasonal/annual time scale.
 
-# Event attribution: 2011 Texas heatwave/drought
+# Event attribution: 2011 Texas heatwave/drought using binomial counting 
 
 Now consider an event attribution study, using an ensemble of model simulations only for 2011, to try to understand the 2011 Texas heatwave/drought.
 
